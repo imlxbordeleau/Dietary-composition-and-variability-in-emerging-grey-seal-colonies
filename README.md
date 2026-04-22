@@ -1,2 +1,10 @@
-# Dietary-composition-and-variability-in-emerging-grey-seal-colonies
-The analyses in this repository were conducted as part of Irani et al. 2026 (https://doi.org/10.1139/cjz-2025-0089). Corresponding data are publicly available on the Department of Fisheries and Oceans Canada's Open Government Portal (https://open.canada.ca/data/en/dataset/c30dc299-9026-4c44-b631-9fd6357aeef4).
+# Dietary composition and sources of variability in emerging offshore grey seal colonies in the Northwest Atlantic
+
+IRANI, Alymuhammad I. (1,2), BORDELEAU, Xavier (1), BENOÎT, Hugues P. (1), GARNIER, Théo (1,2), CUSSON, Pier-Olivier (2), RIVARD, Pierre (1), HAMMILL, Mike O. (1), and PELLETIER, Fanie (2)
+
+1. Institut Maurice-Lamontagne, Department of Fisheries and Oceans Canada, 850 Rte de la Mer, Mont-Joli, QC G5H 3Z4
+2. Dép. de biologie, Faculté des Sciences, Université de Sherbrooke, 2500 Bd de l’université, Sherbrooke, QC J1K 2R1
+
+## Abstract
+
+Apex predators are at the centre of human–wildlife conflict, particularly when their prey include commercially important species, making it critical to understand their diet and ecological impact. In 60 years, the Atlantic grey seal (Halichoerus grypus Fabricius, 1791) population of the Gulf of St. Lawrence (Gulf) has increased ten-folds. In response to population increase and declining sea ice, new offshore colonies have emerged in the Magdalen Islands, now the second-largest aggregation in Canada. Yet, quantitative estimates of diet composition for these colonies are limited, hindering assessments of their impact on the recovery of valuable fish stocks. Conducting hard-part analyses on 496 grey seals sampled between 2015 and 2023, we (I) characterized the seasonal diet of these offshore colonies, (II) compared diet offshore with long-established coastal colonies, and (III) examined inter-annual and age–sex variation. Diet at emerging offshore colonies differed drastically from coastal colonies, reflecting a prey assemblage exploited by a growing number of animals. Diet variation was more pronounced across years than age–sex groups, with year-to-year differences likely driven by shifts in prey availability and age–sex patterns reflecting differences in foraging capacity. These findings provide timely insights into grey seal foraging ecology across major southern Gulf colonies, needed to support ecosystem-based fisheries management.
