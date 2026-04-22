@@ -1,0 +1,63 @@
+
+cff-version: 1.2.0
+title: >-
+  Dietary-composition-and-sources-of-variability-in-emerging-offshore-grey-seal-colonies
+message: >-
+  Analyses performed in the article Alymuhammad I. Irani,
+  Xavier Bordeleau, Hugues P. Benoît, Théo Garnier,
+  Pier-Olivier Cusson, Pierre Rivard, Mike O. Hammill, and
+  Fanie Pelletier. 2026. Dietary composition and sources of
+  variability in emerging offshore grey seal colonies in the
+  Northwest Atlantic. Canadian Journal of Zoology. 104:
+  1-17. https://doi.org/10.1139/cjz-2025-0089
+type: software
+authors:
+  - given-names: Alymuhammad
+    family-names: Irani
+    email: iranialymuhammad@outlook.com
+    orcid: 'https://orcid.org/0009-0009-6735-3744'
+    affiliation: >-
+      Université de Sherbrooke and Department of Fisheries
+      and Oceans Canada (Quebec Region)
+identifiers:
+  - type: doi
+    value: 10.1139/cjz-2025-0089
+    description: Research Article
+repository-code: >-
+  https://github.com/Alynvince/Dietary-composition-and-sources-of-variability-in-emerging-offshore-grey-seal-colonies.git
+abstract: >-
+  Apex predators are at the centre of human–wildlife
+  conflict, particularly when their prey include
+  commercially important species, making it critical to
+  understand their diet and ecological impact. In 60 years,
+  the Atlantic grey seal (Halichoerus grypus Fabricius,
+  1791) population of the Gulf of St. Lawrence (Gulf) has
+  increased ten-folds. In response to population increase
+  and declining sea ice, new offshore colonies have emerged
+  in the Magdalen Islands, now the second-largest
+  aggregation in Canada. Yet, quantitative estimates of diet
+  composition for these colonies are limited, hindering
+  assessments of their impact on the recovery of valuable
+  fish stocks. Conducting hard-part analyses on 496 grey
+  seals sampled between 2015 and 2023, we (I) characterized
+  the seasonal diet of these offshore colonies, (II)
+  compared diet offshore with long-established coastal
+  colonies, and (III) examined inter-annual and age–sex
+  variation. Diet at emerging offshore colonies differed
+  drastically from coastal colonies, reflecting a prey
+  assemblage exploited by a growing number of animals. Diet
+  variation was more pronounced across years than age–sex
+  groups, with year-to-year differences likely driven by
+  shifts in prey availability and age–sex patterns
+  reflecting differences in foraging capacity. These
+  findings provide timely insights into grey seal foraging
+  ecology across major southern Gulf colonies, needed to
+  support ecosystem-based fisheries management.
+keywords:
+  - 'Atlantic grey seal (*Halichoerus grypus* Fabricius, 1791)'
+  - Gulf of St. Lawrence
+  - Hard-part analyses
+  - Diet
+  - Emerging offshore colonies
+license: CC0-1.0
+date-released: '2025-08-30'
