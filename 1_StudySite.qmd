@@ -1,0 +1,229 @@
+---
+title: "1_StudySite"
+format: html
+editor: visual
+---
+
+# Study area
+
+```{r}
+library(ggplot2)
+library(marmap)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(ggspatial)
+library(ggrepel)
+library(grid)
+library(cowplot)
+```
+
+```{r}
+# Bathymetry
+bathy <- getNOAA.bathy(
+  lon1 = -70, lon2 = -50,
+  lat1 = 44, lat2 = 51,
+  resolution = 1)
+
+bathy_df <- fortify.bathy(bathy)
+
+# Land polygon
+land <- ne_countries(scale = "large", returnclass = "sf")
+
+# Sampling sites 
+samplinglocal <- data.frame(
+  site = c("Amet Island",
+            "Brion Island",
+            "Deadman's Island",
+            "Governor's Island",
+            "Murray Harbour",
+            "Neguac",
+            "Rollo Bay",
+            "Tabusintac"),
+
+  Region = c("Northumberland Strait",
+              "Magdalen Islands",
+              "Magdalen Islands",
+              "Northumberland Strait",
+              "Northumberland Strait",
+              "Miramichi Bay",
+              "Northumberland Strait",
+              "Miramichi Bay"),
+
+  lat = c(45.835161,
+          47.785327,
+          47.258504,
+          46.135865,
+          46.002338,
+          47.255065,
+          46.364714,
+          47.332178), 
+          
+  long = c(-63.177142,
+          -61.493668,
+          -62.252823,
+          -63.060011,
+          -62.519843,
+          -65.06773,
+          -62.336058,
+          -65.015655))
+
+# Landmarks 
+landmarks <- data.frame(
+  x = c(-65.5, -62.5, -63, -65.8, -61.5, -59.7), 
+  y = c(46.5, 45.3, 46.7, 48.7, 48.5, 45.5), 
+  angle = c(0, 0, 0, 0, -20, 50),
+  label = c("New \n Brunswick", "Nova \n Scotia", "Prince Edward \n Island", "Québec", "Laurentian Channel", "Atlantic \n Ocean")
+)
+```
+
+```{r}
+sites <- ggplot() +
+  # Bathymetry
+  geom_raster(
+    data = bathy_df, 
+    aes(x = x, y = y, fill = z)
+  ) +
+  scale_fill_gradientn(
+    colors = c("#003366", "#005599","#0077bb", "#66ccff", "#e0f7fa"),
+    values = scales::rescale(c(-600, -300, -100, -50, 0)),
+    name = "Depth (m)",
+    limits = c(-600, 0),
+    breaks = c(-600, -300, 0),
+    na.value = "white"
+  ) +
+  # Land
+  geom_sf(
+    data = land, 
+    fill = "tan", 
+    color = "tan", 
+    size = 0.3
+  ) +
+  # Crop study site
+  coord_sf(
+    xlim = c(-68, -59), 
+    ylim = c(45, 49), 
+    expand = FALSE
+  ) +
+  # Colonies
+  geom_point(
+    data = samplinglocal, 
+    aes(x = long, y = lat, color = Region), 
+    size = 3
+  ) + 
+  geom_text_repel(    
+    data = samplinglocal,
+    aes(x = long, y = lat, label = site),
+    size = 6,
+    box.padding = 0.3,    
+    point.padding = 0.5,
+    segment.color = "grey50",
+    max.overlaps = Inf
+  ) +
+  # Landmarks
+  geom_text(
+    data = landmarks, 
+    aes(x = x, y = y, label = label, angle = angle), 
+    col = 'white', 
+    size = 6
+  ) +
+  # Aesthetics 
+  labs(
+    x = "Longitude", y = "Latitude"
+  ) +
+  scale_y_continuous(
+    breaks = seq(45, 49, length.out = 5)) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    legend.title.position = "top",
+    panel.grid.major = element_blank(),
+    axis.title = element_text(size = 16),
+    # axis.text.x = element_text(size = 12, 
+    #                            angle = 90),
+    axis.text = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    legend.title = element_text(size = 16)
+  ) +
+  annotation_scale(
+    location = "tl", 
+    width_hint = 0.4, 
+    text_cex = 1.5,
+    height = unit(0.40, "cm")) +
+  annotation_north_arrow(
+    location = "tr", 
+    which_north = "true", 
+    height = unit(2, "cm"), 
+    width = unit(2, "cm"),
+    style = north_arrow_fancy_orienteering(
+      text_size = 16, 
+      text_face = "bold")
+  )
+```
+
+```{r}
+inset <- ggplot() +
+  # Land
+  geom_sf(
+    data = land, 
+    fill = "tan", 
+    color = "tan", 
+    size = 0.3
+  ) +
+  # Continental scale
+  coord_sf(
+    xlim = c(-140, 14), 
+    ylim = c(8, 70), 
+    expand = FALSE
+  ) +
+  # Red box
+  geom_rect(
+    aes(
+      xmin = -66, xmax = -61, 
+      ymin = 45.5, ymax = 48), 
+    color = "red",
+    fill = "NA",
+    lwd = 1,
+    inherit.aes = FALSE) +
+  # Continental Landmarks
+  annotate("text", x = -100, y = 40, 
+           label = "North \n America", 
+           col = "black",
+           size = 3) +
+  annotate("text", x = -40, y = 30, 
+         label = "Atlantic Ocean", 
+         col = "black",
+         size = 3) +
+  annotate("text", x = 0, y = 44, 
+         angle = 45, 
+         label = "Europe", 
+         col = "black",
+         size = 3) +
+  annotate("text", x = 0, y = 20, 
+         label = "Africa", 
+         col = "black",
+         size = 3) +
+  # Aesthetics
+  theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    panel.background = 
+      element_rect(fill = "white"),
+    plot.background =
+      element_rect(fill = "grey", color = NA)
+  )
+```
+
+```{r}
+ggdraw() +
+  draw_plot(sites) +  # base map
+  draw_plot(inset, 
+            x = 0.078, y = 0.092, 
+            width = 0.30, height = 0.20)  # inset
+
+ggsave("../4_MANUSCRIPT/output/figures/Figure1.Study Site.png", width = 10, height = 8, dpi = 600, bg = "white")
+
+ggsave("../4_MANUSCRIPT/output/figures/Figure1.tif", width = 10, height = 8, dpi = 600, bg = "white")
+```

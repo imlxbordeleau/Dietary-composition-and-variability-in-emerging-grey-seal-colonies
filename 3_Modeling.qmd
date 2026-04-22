@@ -1,0 +1,894 @@
+---
+title: "Modeling"
+format: html
+editor: visual
+---
+
+# Model preparation
+
+```{r}
+# Package names
+packages <- c(
+  # import data
+  "readr",
+  "readxl",
+  "openxlsx",
+  
+  # syntax
+  "plyr",
+  "dplyr",
+  "tidyverse",
+  
+  # cleaning 
+  "janitor", 
+  "broom",
+  
+  # date 
+  "lubridate",
+  
+  # graphs 
+  "ggplot2",
+  "ggrepel",
+  "ggsignif",
+  "gridExtra",
+  "ggpubr",
+  "plotly",
+  "scales",
+  "cowplot",
+  "magick",
+  "ggeffects",
+  "patchwork", 
+  
+  # stats
+  "glmmTMB",
+  "effects",
+  "emmeans",
+  "DHARMa",
+  "betareg",
+  
+  # tables
+  "DT",
+  
+  # knit 
+  "knitr",
+  
+  # spatial data
+  "sf", # spatial maipulation
+  "tmap", # map making
+  "grid", # viewport
+  
+  # string manipulation 
+  "stringr")
+
+# Install packages not yet installed
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(packages[!installed_packages])
+}
+
+# Packages loading
+invisible(lapply(packages, library, character.only = TRUE))
+
+rm(installed_packages, packages)
+```
+
+To investigate inter-individual variability, across age-sex groups and year, in prey diversity, prey occurrence and its relative importance when present (objective III), we first subsetted our data to only include summer sampling at Magdalen Islands, between 2017 to 2023, because it represented the largest and most consistent sampling group, with reasonable sample size within each year.
+
+```{r Preparing modeling dataframes}
+# Wet weight estimates from measured otoliths and extrapolated wet weights from unmeasured or degraded otoliths
+load("output/Dataframes/ww.Rda")
+
+# Model dataframe
+ww <- ww %>%
+        filter(region_season == "M.Islands_Summer", year(date) %in% c(2017:2023)) %>%
+        mutate(
+          perc_ww = as.numeric(perc_ww), 
+          sexChr = as.character(sex),
+          sex = as.factor(sex),
+          age = as.numeric(age), 
+          yearChr = as.character(year(date)), 
+          year = as.factor(yearChr),
+          totalind = as.numeric(totalind),
+          date = as.factor(date), 
+          agegroupChr = ifelse(age < 1, "Yearling",
+                        ifelse(age > 4 & sexChr == "F", "Adult Female",
+                        ifelse(age > 4 & sexChr == "M", "Adult Male", "Juvenile"))), 
+          agegroup = as.factor(agegroupChr),
+          agegroup = factor(agegroup, levels = c("Yearling", "Juvenile", "Adult Female", "Adult Male")), 
+          region_season = NULL
+        )
+
+# removing NA values for model comparaison
+sapply(ww, function(x)any(is.na(x)))
+ww <- ww %>% filter(!is.na(agegroup))
+
+# Converting model dataframe to presence dataframe
+presence <- ww %>% 
+              mutate( 
+                count = NULL, 
+                age = NULL, 
+                totalww = NULL, 
+                perc_ww = 1) %>% 
+              spread(prey_specie, perc_ww) %>% 
+              replace(. , is.na(.) , 0) # a simple replace because all other columns do not have NA values hence it is restricted to the presence columns
+```
+
+Despite consuming a variety of prey taxa, only a few prey taxa contribute to the majority of grey seal diet. During the summer sampling at Magdalen Islands, sand lance (*Ammodyctes sp.*), cod (*Gadus morhua*), and capelin (*Mallotus villosus*) accounted for about 90% of the total diet by weight ($\%WW_p$). Given the substantial contribution of the percent wet weight of the three taxa, we modelled their occurrence (presence/absence) and relative importance (%WW), when present.
+
+```{r}
+# We model major species identified in Part I at Magdalen Islands in the Summer, sample sizes for which are 
+ww %>%
+    filter(prey_specie %in% c("Ammodytes sp. (Sand lance)", "Gadus sp. (Cod)", "Mallotus villosus (Capelin)")) %>%
+    count(prey_specie)  %>% 
+    datatable(., rownames = T)
+
+# correcting for column names to simplyfy model creation
+names(presence)[names(presence) == 'Ammodytes sp. (Sand lance)'] <- 'sandlance'
+names(presence)[names(presence) == 'Gadus sp. (Cod)'] <- 'cod'
+names(presence)[names(presence) == 'Mallotus villosus (Capelin)'] <- 'capelin'
+```
+
+## Occurrence model
+
+```{r}
+occurrencemodeling <- function(
+  response_var, 
+  data, 
+  n_iterations = 1000
+) {
+  
+  # response_var <- "sandlance"
+  # data <- presence
+  
+  # Define formula for the model
+  formula <- as.formula(paste(response_var, "~ agegroup + year"))
+  
+  # Fit a binomial GLM
+  binom <- glm(
+    formula, 
+    family = binomial(), 
+    data = data
+  )
+  
+  # Extract model summary
+  model_summary <- summary(binom)
+  
+  ## Occurrence by year
+  formula_emm <- as.formula("pairwise ~ year")
+  
+  # Compute estimated marginal means (EMMs) for year
+  predictions_year <- emmeans(
+    binom, 
+    formula_emm, 
+    adjust = "tukey", 
+    type = "response", 
+    weights = "equal"
+  )$emmeans %>% 
+    data.frame()
+  
+  # Perform pairwise comparisons with Tukey adjustment
+  comparaisons <- emmeans(
+    binom, 
+    formula_emm, 
+    adjust = "tukey", 
+    type = "response", 
+    weights = "equal"
+  )$contrasts %>% 
+    data.frame() 
+  
+  pairwise <- comparaisons %>% 
+    filter(p.value <= 0.05)
+  
+  # Extract significant pairs for plotting
+  pairwise_graph <- pairwise |>  
+    separate(contrast, c("var1", "var2"), extra = "merge") 
+  
+  pairwise_graph$var1 <- gsub("year", "", pairwise_graph$var1) %>% as.character()
+  pairwise_graph$var2 <- gsub("year", "", pairwise_graph$var2) %>% as.character()
+  
+  pairs <- lapply(
+    1:nrow(pairwise_graph), 
+    function(i) list(c(pairwise_graph$var1[i], pairwise_graph$var2[i]))
+  ) 
+  
+  pairs <- unlist(pairs, recursive = FALSE) # Flatten list
+  
+  position <- seq(
+    from = max(predictions_year$asymp.UCL) + 0.05, 
+    to = max(predictions_year$asymp.UCL) + 0.05 + 0.05 * nrow(pairwise_graph), 
+    by = 0.05
+  )
+  
+  # Generate occurrence plot by year
+  year_plot <- ggplot() +
+    geom_jitter(
+      data = data, 
+      aes(x = year, y = !!sym(response_var)), 
+      col = "grey", alpha = 0.8, 
+      width = 0.2, height = 0.1
+    ) +
+    geom_errorbar(
+      data = predictions_year, 
+      aes(x = year, ymin = asymp.LCL, ymax = asymp.UCL), 
+      width = 0.2
+    ) + 
+    geom_point(
+      data = predictions_year, 
+      aes(x = year, y = prob), 
+      size = 3
+    ) + 
+    labs(
+      x = NULL, 
+      y = "Presence probability"
+    ) +
+    theme_bw() + 
+    scale_y_continuous(breaks = seq(0, 1, by = 0.25)) + 
+    geom_signif(
+      data = predictions_year,
+      aes(x = year, y = prob),
+      comparisons = pairs,
+      annotation = "",
+      map_signif_level = TRUE,
+      textsize = 7, 
+      y_position = position, 
+      col = "black"
+    ) + 
+    theme(
+      axis.text = element_text(size = 10), 
+      axis.title = element_text(size = 14))
+  
+  ## Occurrence by agegroup
+  formula_emm <- as.formula("pairwise ~ agegroup")
+  
+  predictions_agegroup <- emmeans(
+    binom, 
+    formula_emm, 
+    adjust = "tukey", 
+    type = "response", 
+    weights = "equal"
+  )$emmeans %>% 
+    data.frame()
+  
+  comparaisons_agegroup <- emmeans(
+    binom, 
+    formula_emm, 
+    adjust = "tukey", 
+    type = "response", 
+    weights = "equal"
+  )$contrasts %>%  
+    data.frame() 
+  
+  pairwise_agegroup <- comparaisons_agegroup %>% 
+    filter(p.value <= 0.05)
+  
+  pairwise_graph <- pairwise_agegroup |>  
+    separate(contrast, c("var1", "var2"), extra = "merge")
+  
+  pairwise_graph$var1 <- gsub("agegroup", "", pairwise_graph$var1) %>% as.character()
+  pairwise_graph$var2 <- gsub("agegroup", "", pairwise_graph$var2) %>% as.character()
+  
+  pairs_agegroup <- lapply(
+    1:nrow(pairwise_graph), 
+    function(i) list(c(pairwise_graph$var1[i], pairwise_graph$var2[i]))
+  )
+  
+  pairs_agegroup <- unlist(pairs_agegroup, recursive = FALSE)
+  
+  position_agegroup <- seq(
+    from = max(predictions_agegroup$asymp.UCL) + 0.05, 
+    to = max(predictions_agegroup$asymp.UCL) + 0.05 + 0.05 * nrow(pairwise_graph), 
+    by = 0.05
+  )
+  
+  # Generate occurrence plot by agegroup
+ agegroup_plot <- ggplot() +
+    geom_jitter(
+      data = data, 
+      aes(x = agegroup, y = !!sym(response_var)), 
+      col = "grey", alpha = 0.8, 
+      width = 0.2, height = 0.1
+    ) +
+    geom_errorbar(
+      data = predictions_agegroup, 
+      aes(x = agegroup, ymin = asymp.LCL, ymax = asymp.UCL), 
+      width = 0.2
+    ) + 
+    geom_point(
+      data = predictions_agegroup, 
+      aes(x = agegroup, y = prob), 
+      size = 3
+    ) + 
+    labs(
+      x = NULL, 
+      y = "Presence probability"
+    ) +
+    theme_bw() + 
+    scale_y_continuous(breaks = seq(0, 1, by = 0.25)) + 
+    geom_signif(
+      data = predictions_agegroup,
+      aes(x = agegroup, y = prob),
+      comparisons = pairs_agegroup,
+      annotation = "",
+      map_signif_level = TRUE,
+      textsize = 7, 
+      y_position = position_agegroup, 
+      col = "black"
+    )  + 
+    theme(
+      axis.text = element_text(size = 10), 
+      axis.title = element_text(size = 14))
+  
+  # Combine plots
+  fig <- (year_plot) + (agegroup_plot + labs(y = NULL))
+  
+  # Combine significant pairwise comparisons
+  signif <- rbind.fill(comparaisons, comparaisons_agegroup)
+
+  # Residuals 
+  residuals <- simulateResiduals(fittedModel = binom, 
+                                   n = n_iterations,
+                                   plot = F)
+  
+  # Return results as a list
+  return(list(
+    model_summary, 
+    fig, 
+    predictions_year,
+    predictions_agegroup,
+    signif,
+    binom, 
+    data, 
+    residuals
+  ))
+}
+```
+
+## Consumption model
+
+```{r}
+consumpmodeling <- function(
+  prey_taxon, 
+  n_simulations = 1000
+) {
+  
+  # prey_taxon <- "Ammodytes sp. (Sand lance)"
+  
+  data <- ww %>% 
+            filter(prey_specie == prey_taxon) %>% 
+            mutate(
+              prop = perc_ww/100,
+              restricted_prop =
+                (((prop)*(nrow(.)-1)) + 0.5) /
+                nrow(.))
+  
+  response_var <- "restricted_prop"
+  
+  # Define formula for the model
+  formula <- as.formula(paste(response_var, "~ agegroup + year"))
+  
+  # Model 
+  beta <- betareg(formula,
+             data = data,
+             link = c("logit"),
+             link.phi = NULL,
+             type = c("ML"))
+  
+  # Extract model summary
+  model_summary <- summary(beta)
+  
+  ## Occurrence by year
+  formula_emm <- as.formula("pairwise ~ year")
+  
+  # Compute estimated marginal means (EMMs) for year
+  predictions_year <- emmeans(
+    beta, 
+    formula_emm, 
+    adjust = "tukey", 
+    type = "response", 
+    weights = "equal"
+  )$emmeans %>% 
+    data.frame() %>%  
+  mutate(
+    emmean = 
+      100*(emmean*nrow(data) - 0.5)/(nrow(data)-1),
+    asymp.LCL = 
+      (asymp.LCL*nrow(data) - 0.5)/(nrow(data)-1), 
+    asymp.UCL = 
+      (asymp.UCL*nrow(data) - 0.5)/(nrow(data)-1),
+    asymp.LCL = 
+      ifelse(asymp.LCL < 0, 0, asymp.LCL*100),
+    asymp.UCL = 
+      ifelse(asymp.UCL > 1, 100, asymp.UCL*100))
+  
+  # Perform pairwise comparisons with Tukey adjustment
+  comparaisons <- emmeans(
+    beta, 
+    formula_emm, 
+    adjust = "tukey", 
+    type = "response", 
+    weights = "equal"
+  )$contrasts %>% 
+    data.frame() 
+  
+  pairwise <- comparaisons %>% 
+    filter(p.value <= 0.05)
+  
+  # Extract significant pairs for plotting
+  pairwise_graph <- pairwise |>  
+    separate(contrast, c("var1", "var2"), extra = "merge") 
+  
+  pairwise_graph$var1 <- gsub(
+    "year", "", pairwise_graph$var1) %>% as.character()
+  pairwise_graph$var2 <- gsub(
+    "year", "", pairwise_graph$var2) %>% as.character()
+  
+  pairs <- lapply(
+    1:nrow(pairwise_graph), 
+    function(i) list(c(pairwise_graph$var1[i], pairwise_graph$var2[i]))
+  ) 
+  
+  pairs <- unlist(pairs, recursive = FALSE) # Flatten list
+  
+  position <- seq(
+    from = max(predictions_year$asymp.UCL) + 5, 
+    to = max(predictions_year$asymp.UCL) + 5 + 5 * nrow(pairwise_graph), 
+    by = 5
+  )
+  
+  # Generate importance plot by year
+  year_plot <- ggplot() +
+    geom_jitter(
+      data = data, 
+      aes(x = year, y = perc_ww), 
+      col = "grey", alpha = 0.8, 
+      width = 0.2, height = 0
+    ) +
+    geom_errorbar(
+      data = predictions_year, 
+      aes(x = year, ymin = asymp.LCL, ymax = asymp.UCL), 
+      width = 0.2
+    ) + 
+    geom_point(
+      data = predictions_year, 
+      aes(x = year, y = emmean), 
+      size = 3
+    ) + 
+    labs(
+      x = NULL, 
+      y = "Percent Wet Weight"
+    ) +
+    theme_bw() + 
+    scale_y_continuous(breaks = seq(0, 100, by = 25)) + 
+    geom_signif(
+      data = predictions_year,
+      aes(x = year, y = emmean),
+      comparisons = pairs,
+      annotation = "",
+      map_signif_level = TRUE,
+      textsize = 7, 
+      y_position = position, 
+      col = "black"
+    )  + 
+    theme(
+      axis.text = element_text(size = 10), 
+      axis.title = element_text(size = 14))
+  
+  ## Occurrence by agegroup
+  formula_emm <- as.formula("pairwise ~ agegroup")
+  
+  predictions_agegroup <- emmeans(
+    beta, 
+    formula_emm, 
+    adjust = "tukey", 
+    type = "response", 
+    weights = "equal"
+  )$emmeans %>% 
+    data.frame() %>% 
+  mutate(
+    emmean = 100*(emmean*nrow(data) - 0.5)/(nrow(data)-1),
+    asymp.LCL = (asymp.LCL*nrow(data) - 0.5)/(nrow(data)-1), 
+    asymp.UCL = (asymp.UCL*nrow(data) - 0.5)/(nrow(data)-1),
+    asymp.LCL = ifelse(asymp.LCL < 0, 0, asymp.LCL*100),
+    asymp.UCL = ifelse(asymp.UCL > 1, 100, asymp.UCL*100))
+  
+  comparaisons_agegroup <- emmeans(
+    beta, 
+    formula_emm, 
+    adjust = "tukey", 
+    type = "response", 
+    weights = "equal"
+  )$contrasts %>%  
+    data.frame() 
+  
+  
+  pairwise_agegroup <- comparaisons_agegroup %>% 
+    filter(p.value <= 0.05)
+  
+  pairwise_graph <- pairwise_agegroup |>  
+    separate(contrast, c("var1", "var2"), extra = "merge")
+  
+  pairwise_graph$var1 <- gsub("agegroup", "", pairwise_graph$var1) %>% as.character()
+  pairwise_graph$var2 <- gsub("agegroup", "", pairwise_graph$var2) %>% as.character()
+  
+  pairs_agegroup <- lapply(
+    1:nrow(pairwise_graph), 
+    function(i) list(c(pairwise_graph$var1[i], pairwise_graph$var2[i]))
+  )
+  
+  pairs_agegroup <- unlist(pairs_agegroup, recursive = FALSE)
+  
+  position_agegroup <- seq(
+    from = max(predictions_agegroup$asymp.UCL) + 5, 
+    to = max(predictions_agegroup$asymp.UCL) + 5 + 5 * nrow(pairwise_graph), 
+    by = 5
+  )
+  
+  # Generate occurrence plot by agegroup
+ agegroup_plot <- ggplot() +
+    geom_jitter(
+      data = data, 
+      aes(x = agegroup, y = perc_ww), 
+      col = "grey", alpha = 0.8, 
+      width = 0.2, height = 0
+    ) +
+    geom_errorbar(
+      data = predictions_agegroup, 
+      aes(x = agegroup, ymin = asymp.LCL, ymax = asymp.UCL), 
+      width = 0.2
+    ) + 
+    geom_point(
+      data = predictions_agegroup, 
+      aes(x = agegroup, y = emmean), 
+      size = 3
+    ) + 
+    labs(
+      x = NULL, 
+      y = "Percent Wet Weight"
+    ) +
+    theme_bw() + 
+    scale_y_continuous(breaks = seq(0, 100, by = 25)) + 
+    geom_signif(
+      data = predictions_agegroup,
+      aes(x = agegroup, y = emmean),
+      comparisons = pairs_agegroup,
+      annotation = "",
+      map_signif_level = TRUE,
+      textsize = 7, 
+      y_position = position_agegroup, 
+      col = "black"
+    )  + 
+    theme(
+      axis.text = element_text(size = 10), 
+      axis.title = element_text(size = 14))
+  
+  # Combine plots
+  fig <- (year_plot) + (agegroup_plot + labs(y = NULL))
+  
+  # Combine significant pairwise comparisons
+  signif <- rbind.fill(comparaisons, comparaisons_agegroup)
+  
+  # Residuals
+  residuals <- createDHARMa(
+    simulatedResponse = as.matrix(
+      simulate(beta, nsim = n_simulations)), 
+    observedResponse = data$restricted_prop, 
+    fittedPredictedResponse = predict(beta))
+  
+  # Return results as a list
+  return(list(
+    model_summary, 
+    fig, 
+    predictions_year,
+    predictions_agegroup,
+    signif,
+    beta, 
+    data, 
+    residuals
+  ))
+}
+```
+
+```{r}
+occur_sandlance <- occurrencemodeling("sandlance", presence) 
+consump_sandlance <- consumpmodeling("Ammodytes sp. (Sand lance)")
+
+save(occur_sandlance, file = "../4_MANUSCRIPT/output/figures/presence_sandlance.Rda")
+save(consump_sandlance, file = "../4_MANUSCRIPT/output/figures/comsumption_sandlance.Rda")
+```
+
+```{r}
+occur_cod <- occurrencemodeling("cod", presence)
+consump_cod <- consumpmodeling("Gadus sp. (Cod)")
+
+save(occur_cod, file = "../4_MANUSCRIPT/output/figures/presence_cod.Rda")
+save(consump_cod, file = "../4_MANUSCRIPT/output/figures/comsump_cod.Rda")
+```
+
+```{r}
+occur_capelin <- occurrencemodeling("capelin", presence)
+consump_capelin <- consumpmodeling("Mallotus villosus (Capelin)")
+
+
+
+save(occur_capelin, file = "../4_MANUSCRIPT/output/figures/presence_capelin.Rda")
+save(consump_capelin, file = "../4_MANUSCRIPT/output/figures/consump_capelin.Rda")
+```
+
+## Diversity Model
+
+Unlike seasonal and regional comparisons, where local prey assemblages may differ, absences among samples collected in the same season (summer 2017–2023) and region (Magdalen Islands) can result from lack of predator–prey encounter, failure to detect, or failure to capture, and thus do not necessarily indicate true absence — particularly given the lack of evidence for local extirpations in the region during the study period. Allowing species richness to vary would implicitly assume that an absence in a given sample represents true absence. To avoid this assumption, we assume the contrary - that at least one individual (the minimum requirement for species richness) of each prey taxon found in the digestive tracts was present near the Magdalen Island colonies throughout the study period. Mathematically, we treated species richness as constant, excluded it from the model by dividing the Shannon diversity index by its maximum possible value, and focused solely on evenness (i.e. feeding behaviour; predation of single or multiple prey taxa). The maximum achievable Shannon value is the logarithm value of the total number of unique prey taxa found in all digestive tracts, i.e. log(21), where zero represents single prey consumption (no diversity) and one represents equal consumption in biomass of all 21 prey taxa (maximum achievable diversity). This approach, known as the Shannon equity index ($H'_s$), enabled us to assess changes in prey composition without conflating them with potential artefacts of detection or capture.
+
+```{r}
+### Using biomass
+diversity <- ww %>%
+        dplyr::select(uniqueID,agegroup,sex,year,prey_specie,perc_ww, date, totalind) %>%
+        mutate(
+          prop = perc_ww/100,
+          perc_ww = NULL,
+          mediantotalind = as.character(totalind - median(totalind)/1000),
+          totalind = as.character(totalind)) %>%
+        spread(prey_specie,prop) %>%
+        replace(is.na(.), 0) %>%
+        mutate_if(is.numeric, ~.*log(.)) %>%
+        mutate(
+          shannon = -rowSums(
+            across(
+              all_of(
+                unique(ww$prey_specie))), na.rm = T),
+          medianTotalInd = as.numeric(mediantotalind),
+          totalind = as.numeric(totalind),
+          shannonEquity = shannon/log(21)) # 21 prey species
+```
+
+```{r}
+diversitymodeling <- function(
+  diversity_dataframe, 
+  n_simulations = 1000) {
+  
+  diversity_dataframe <- diversity
+  
+  data <- diversity_dataframe %>% 
+            mutate(
+              restricted_prop =
+                (((shannonEquity)*(nrow(.)-1)) + 0.5) /
+                nrow(.))
+  
+  response_var <- "restricted_prop"
+  
+  # Define formula for the model
+  formula <- as.formula(paste(response_var, "~ agegroup + year"))
+  
+  # Model 
+  beta <- betareg(formula,
+              data = data,
+              link = c("logit"),
+              link.phi = NULL,
+              type = c("ML"))
+  
+  # Extract model summary
+  model_summary <- summary(beta)
+  
+  ## Occurrence by year
+  formula_emm <- as.formula("pairwise ~ year")
+  
+  # Compute estimated marginal means (EMMs) for year
+  predictions_year <- emmeans(
+    beta, 
+    formula_emm, 
+    adjust = "tukey", 
+    type = "response", 
+    weights = "equal"
+  )$emmeans %>% 
+    data.frame() %>%  
+  mutate(
+    emmean = 
+      (emmean*nrow(data) - 0.5)/(nrow(data)-1),
+    asymp.LCL = 
+      (asymp.LCL*nrow(data) - 0.5)/(nrow(data)-1), 
+    asymp.UCL = 
+      (asymp.UCL*nrow(data) - 0.5)/(nrow(data)-1),
+    asymp.LCL = 
+      ifelse(asymp.LCL < 0, 0, asymp.LCL),
+    asymp.UCL = 
+      ifelse(asymp.UCL > 1, 1, asymp.UCL))
+  
+  # Perform pairwise comparisons with Tukey adjustment
+  comparaisons <- emmeans(
+    beta, 
+    formula_emm, 
+    adjust = "tukey", 
+    type = "response", 
+    weights = "equal"
+  )$contrasts %>% 
+    data.frame() 
+  
+  pairwise <- comparaisons %>% 
+    filter(p.value <= 0.05)
+  
+  # Extract significant pairs for plotting
+  pairwise_graph <- pairwise |>  
+    separate(contrast, c("var1", "var2"), extra = "merge") 
+  
+  pairwise_graph$var1 <- gsub(
+    "year", "", pairwise_graph$var1) %>% as.character()
+  pairwise_graph$var2 <- gsub(
+    "year", "", pairwise_graph$var2) %>% as.character()
+  
+  pairs <- lapply(
+    1:nrow(pairwise_graph), 
+    function(i) list(c(pairwise_graph$var1[i], pairwise_graph$var2[i]))
+  ) 
+  
+  pairs <- unlist(pairs, recursive = FALSE) # Flatten list
+  
+  position <- seq(
+    from = max(predictions_year$asymp.UCL) + 0.05, 
+    to = max(predictions_year$asymp.UCL) + 0.05 + 0.05 * nrow(pairwise_graph), 
+    by = 0.05
+  )
+  
+  # Generate importance plot by year
+  year_plot <- ggplot() +
+    geom_jitter(
+      data = data, 
+      aes(x = year, y = shannonEquity), 
+      col = "grey", alpha = 0.8, 
+      width = 0.2, height = 0
+    ) +
+    geom_errorbar(
+      data = predictions_year, 
+      aes(x = year, ymin = asymp.LCL, ymax = asymp.UCL), 
+      width = 0.2
+    ) + 
+    geom_point(
+      data = predictions_year, 
+      aes(x = year, y = emmean), 
+      size = 3
+    ) + 
+    labs(
+      x = NULL, 
+      y = "Shannon-Equity Index"
+    ) +
+    theme_bw() + 
+    scale_y_continuous(breaks = seq(0, 1, by = 0.25)) + 
+    geom_signif(
+      data = predictions_year,
+      aes(x = year, y = emmean),
+      comparisons = pairs,
+      annotation = "",
+      map_signif_level = TRUE,
+      textsize = 7, 
+      y_position = position, 
+      col = "black"
+    )  + 
+    theme(
+      # axis.text = element_text(size = 10), 
+      axis.title = element_text(size = 14))
+  
+  ## Occurrence by agegroup
+  formula_emm <- as.formula("pairwise ~ agegroup")
+  
+  predictions_agegroup <- emmeans(
+    beta, 
+    formula_emm, 
+    adjust = "tukey", 
+    type = "response", 
+    weights = "equal"
+  )$emmeans %>% 
+    data.frame() %>% 
+  mutate(
+    emmean = (emmean*nrow(data) - 0.5)/(nrow(data)-1),
+    asymp.LCL = (asymp.LCL*nrow(data) - 0.5)/(nrow(data)-1), 
+    asymp.UCL = (asymp.UCL*nrow(data) - 0.5)/(nrow(data)-1),
+    asymp.LCL = ifelse(asymp.LCL < 0, 0, asymp.LCL),
+    asymp.UCL = ifelse(asymp.UCL > 1, 1, asymp.UCL))
+  
+  comparaisons_agegroup <- emmeans(
+    beta, 
+    formula_emm, 
+    adjust = "tukey", 
+    type = "response", 
+    weights = "equal"
+  )$contrasts %>%  
+    data.frame() 
+  
+  pairwise_agegroup <- comparaisons_agegroup %>% 
+    filter(p.value <= 0.05)
+  
+  pairwise_graph <- pairwise_agegroup |>  
+    separate(contrast, c("var1", "var2"), extra = "merge")
+  
+  pairwise_graph$var1 <- gsub("agegroup", "", pairwise_graph$var1) %>% as.character()
+  pairwise_graph$var2 <- gsub("agegroup", "", pairwise_graph$var2) %>% as.character()
+  
+  pairs_agegroup <- lapply(
+    1:nrow(pairwise_graph), 
+    function(i) list(c(pairwise_graph$var1[i], pairwise_graph$var2[i]))
+  )
+  
+  pairs_agegroup <- unlist(pairs_agegroup, recursive = FALSE)
+  
+  position_agegroup <- seq(
+    from = max(predictions_agegroup$asymp.UCL) + 0.05, 
+    to = max(predictions_agegroup$asymp.UCL) + 0.05 + 0.05 * nrow(pairwise_graph), 
+    by = 0.05
+  )
+  
+  # Generate occurrence plot by agegroup
+ agegroup_plot <- ggplot() +
+    geom_jitter(
+      data = data, 
+      aes(x = agegroup, y = shannonEquity), 
+      col = "grey", alpha = 0.8, 
+      width = 0.2, height = 0
+    ) +
+    geom_errorbar(
+      data = predictions_agegroup, 
+      aes(x = agegroup, ymin = asymp.LCL, ymax = asymp.UCL), 
+      width = 0.2
+    ) + 
+    geom_point(
+      data = predictions_agegroup, 
+      aes(x = agegroup, y = emmean), 
+      size = 3
+    ) + 
+    labs(
+      x = NULL, 
+      y = "Shannon-Equity Index"
+    ) +
+    theme_bw() + 
+    scale_y_continuous(breaks = seq(0, 1, by = 0.25)) + 
+    geom_signif(
+      data = predictions_agegroup,
+      aes(x = agegroup, y = emmean),
+      comparisons = pairs_agegroup,
+      annotation = "",
+      map_signif_level = TRUE,
+      textsize = 7, 
+      y_position = position_agegroup, 
+      col = "black"
+    )  + 
+    theme(
+      # axis.text = element_text(size = 10), 
+      axis.title = element_text(size = 14))
+  
+  # Combine plots
+  fig <- (year_plot) + (agegroup_plot + labs(y = NULL))
+  
+  # Combine significant pairwise comparisons
+  signif <- rbind.fill(comparaisons, comparaisons_agegroup)
+  
+  # Residuals 
+  residuals <- createDHARMa(
+    simulatedResponse = as.matrix(
+      simulate(beta, nsim = n_simulations)), 
+    observedResponse = data$restricted_prop, 
+    fittedPredictedResponse = predict(beta))
+
+  # Return results as a list
+  return(list(
+    model_summary, 
+    fig, 
+    predictions_year,
+    predictions_agegroup,
+    signif,
+    beta, 
+    data, 
+    residuals
+  ))
+}
+```
+
+```{r}
+diversity_model <- diversitymodeling(diversity)
+
+save(diversity_model, file = "../4_MANUSCRIPT/output/figures/diversity.Rda")
+```
+
+# Individual diet information used in the manuscript to generate heat-plot
+
+```{r}
+ww_modeling <- ww
+
+save(ww_modeling, file = "../4_MANUSCRIPT/output/figures/ww.Rda")
+```

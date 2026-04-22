@@ -1,0 +1,951 @@
+---
+title: "BootStrapping"
+format: html
+editor: visual
+---
+
+```{r}
+# Package names
+packages <- c(
+  # import data
+  "readr",
+  "readxl",
+  "openxlsx",
+  
+  # syntax
+  "plyr",
+  "dplyr",
+  "tidyverse",
+  
+  # cleaning 
+  "janitor", 
+  "broom",
+  
+  # date 
+  "lubridate",
+  
+  # graphs 
+  "ggplot2",
+  "ggrepel",
+  "ggsignif",
+  "gridExtra",
+  "ggpubr",
+  "plotly",
+  "scales",
+  "cowplot",
+  "magick",
+  
+  # tables
+  "DT",
+  
+  # knit 
+  "knitr",
+  
+  # spatial data
+  "sf", # spatial maipulation
+  "tmap", # map making
+  "grid", # viewport
+  
+  # string manipulation 
+  "stringr",
+  
+  # Beta models 
+  "betareg")
+
+# Install packages not yet installed
+installed_packages <- packages %in% rownames(installed.packages())
+if (any(installed_packages == FALSE)) {
+  install.packages(packages[!installed_packages])
+}
+
+# Packages loading
+invisible(lapply(packages, library, character.only = TRUE))
+
+rm(installed_packages, packages)
+```
+
+```{r}
+# Metadata
+load("data/info.Rda")
+
+# Otolith counts
+load("data/dat.Rda")
+
+# Otolith sizes
+load("data/mol.Rda")
+
+# Species-specific numerical correction factors
+load("data/NCF.Rda")
+
+# Colourblind palette
+cbbPalette <- c("#009E73", "#D55E00", "#0072B2", "black")
+```
+
+# Bootstrapping
+
+## Hierarchical extrapolation
+
+We imputed the size and weight of unmeasured or degraded otoliths using the mean otolith length calculated from measured otoliths of the same taxon found within the same seal. In the absence of measured otoliths for a specific individual seal and prey taxon, we imputed hierarchically. First, using the mean otolith length of that taxon, from other seals sampled on the same day, and if not available, from the same month, then the same site, then the same region, and finally, from the same taxonomic family.
+
+```{r reconstructing individual diet using wet weights prior to digestion}
+# NOTE ww_mol implies input from files where otoliths were measured and equations were applied, this name is used on a rolling basis in this chunk
+
+# Extracting inputs mol file
+ww_mol <- mol %>%
+             group_by(uniqueID, prey_specie) %>% 
+             summarize(
+                ot_measured = n(),
+                meanww_ind = mean(FW),
+                sumww_ind = sum(FW)) %>% ungroup()
+
+# Merging count data with meta-data necessary extrapolation
+ww <- dat
+ww$site <- info$site[match(ww$uniqueID, info$uniqueID)]
+ww$region <- info$region[match(ww$uniqueID, info$uniqueID)]
+ww$date <- info$date[match(ww$uniqueID, info$uniqueID)]
+
+# Fishes for which otoliths have been measured added to the wet weight data frame
+ww <- merge(x = ww, y = ww_mol, by = c("uniqueID", "prey_specie"), all.x=TRUE)
+
+# Generally, we consider that the measured otoliths were not paired as they were randomly selected, however, when the number of otoliths measured is greater than the number of prey, this implies that both otoliths for a prey individual were measured, hence in these circumstances otoliths are considered to be paired.
+ww$ot_measured[is.na(ww$ot_measured)] <- 0
+ww$ind_notmeasured <- ww$count - ww$ot_measured
+ww$sumww <- ifelse(ww$ind_notmeasured < 0, ww$sumww_ind/2, ww$sumww_ind)
+
+# Number of measured otoliths is also divided by two as this now implies the number of individuals. When more otoliths than prey are measured, the individuals are paired, otherwise, they are unpaired
+ww$ind_measured <- ifelse(ww$ind_notmeasured < 0, round(ww$ot_measured/2, 0), ww$ot_measured)
+
+# Recalculating after uniforming the units
+ww$ind_notmeasured <- ww$count - ww$ind_measured
+
+# Note that there are 3 for which more otoliths were measured than possible. This is an error and hence we will rather use extrapolated values and assume that none were measured 
+ww$ind_notmeasured <- ifelse(ww$ind_notmeasured < 0, ww$count, ww$ind_notmeasured)
+
+# Here above, we have assigned wet weights to those prey whose otoliths were measured. We also know the number of prey for which extrapolation will be required.
+
+#'
+#' Same Stomach
+## -----------------------------------------
+ww$extrap_sumww <- ww$ind_notmeasured*ww$meanww_ind
+
+### Same day
+# Extracting mol info
+ww_mol <- mol 
+ww_mol$date <- info$date[match(ww_mol$uniqueID, info$uniqueID)]
+ww_mol <- ww_mol %>% group_by(date, prey_specie) %>% summarise(meanww_date = mean(FW)) %>% ungroup()
+
+# Adding it to our dataframe
+ww$meanww_day <- ww_mol$meanww_date[match(paste(ww$prey_specie, ww$date), paste(ww_mol$prey_specie, ww_mol$date))]
+
+# The code below ensures that the mean is assigned correctly
+ww$meanww_day <- ifelse(is.na(ww$meanww_ind), ww$meanww_day, NA) 
+
+#Calculating sum
+ww$extrap_sumww <- ifelse(!is.na(ww$meanww_day), ww$ind_notmeasured*ww$meanww_day, ww$extrap_sumww)
+
+#'
+#' Same month at same site
+## -----------------------------------------
+
+# Extracting mol info
+ww_mol <- mol 
+ww_mol$month <- month(info$date[match(ww_mol$uniqueID, info$uniqueID)])
+ww_mol$site <- info$site[match(ww_mol$uniqueID, info$uniqueID)]
+ww_mol <- ww_mol %>% group_by(site, month, prey_specie) %>% summarise(meanww_month = mean(FW)) %>% ungroup()
+
+# Adding it to our dataframe
+ww$meanww_month <- ww_mol$meanww_month[match(paste(ww$prey_specie, month(ww$date), ww$site), paste(ww_mol$prey_specie, ww_mol$month, ww_mol$site))]
+# The code below ensures that the mean is assigned correctly
+ww$meanww_month <- ifelse(is.na(ww$meanww_ind) & is.na(ww$meanww_day),
+                          ww$meanww_month, NA) 
+# Calculating sum
+ww$extrap_sumww <- ifelse(!is.na(ww$meanww_month), ww$ind_notmeasured*ww$meanww_month, ww$extrap_sumww)
+
+#'
+#' Same year and site
+## -----------------------------------------
+
+# Extracting mol info
+ww_mol <- mol 
+ww_mol$year <- year(info$date[match(ww_mol$uniqueID, info$uniqueID)])
+ww_mol$site <- info$site[match(ww_mol$uniqueID, info$uniqueID)]
+ww_mol <- ww_mol %>% group_by(site, year, prey_specie) %>% summarise(meanww_year = mean(FW)) %>% ungroup()
+# Adding it to our dataframe
+ww$meanww_year <- ww_mol$meanww_year[match(paste(ww$prey_specie, year(ww$date), ww$site), paste(ww_mol$prey_specie, ww_mol$year, ww_mol$site))]
+# The code below ensures that the mean is assigned correctly
+ww$meanww_year <- ifelse(is.na(ww$meanww_ind) & is.na(ww$meanww_day) & is.na(ww$meanww_month),
+                          ww$meanww_year, NA) 
+# Calculating sum
+ww$extrap_sumww = ifelse(!is.na(ww$meanww_year), ww$ind_notmeasured*ww$meanww_year, ww$extrap_sumww)
+
+#'
+#' Same site
+## -----------------------------------------
+
+# Extracting mol info
+ww_mol <- mol 
+ww_mol$site <- info$site[match(ww_mol$uniqueID, info$uniqueID)]
+ww_mol <- ww_mol %>% group_by(site, prey_specie) %>% summarise(meanww_site = mean(FW)) %>% ungroup()
+
+# Adding it to our dataframe
+ww$meanww_site <- ww_mol$meanww_site[match(paste(ww$prey_specie, ww$site), paste(ww_mol$prey_specie, ww_mol$site))]
+
+# The code below ensures that the mean is assigned correctly
+ww$meanww_site <- ifelse(
+    is.na(ww$meanww_ind) & is.na(ww$meanww_day) & is.na(ww$meanww_month) & is.na(ww$meanww_year),
+                          ww$meanww_site, NA) 
+# Calculating sum
+ww$extrap_sumww <- ifelse(!is.na(ww$meanww_site), ww$ind_notmeasured*ww$meanww_site, ww$extrap_sumww)
+
+#'
+#' Same region
+## -----------------------------------------
+
+#Extracting mol info
+ww_mol <- mol 
+ww_mol$region <- info$region[match(ww_mol$uniqueID, info$uniqueID)]
+ww_mol <- ww_mol %>% group_by(region, prey_specie) %>% summarise(meanww_region = mean(FW)) %>% ungroup()
+
+# Adding it to our dataframe
+ww$meanww_region <- ww_mol$meanww_region[match(paste(ww$prey_specie, ww$region), paste(ww_mol$prey_specie, ww_mol$region))]
+
+# The code below ensures that the mean is assigned correctly
+ww$meanww_region = ifelse(
+    is.na(ww$meanww_ind) & is.na(ww$meanww_day) & is.na(ww$meanww_month) & is.na(ww$meanww_year) & is.na(ww$meanww_site),
+                          ww$meanww_region, NA) 
+# Calculating sum
+ww$extrap_sumww <- ifelse(!is.na(ww$meanww_region), ww$ind_notmeasured*ww$meanww_region, ww$extrap_sumww)
+
+#'
+#' Same taxonomic family
+## -----------------------------------------
+
+# Extracting mol info
+ww_mol <- mol 
+ww_mol$prey_family <- dat$prey_family[match(ww_mol$prey_specie, dat$prey_specie)]
+ww_mol <- ww_mol %>% group_by(prey_family) %>% summarise(meanww_group = mean(FW)) %>% ungroup()
+
+# Adding it to our dataframe
+ww$meanww_group <- ww_mol$meanww_group[match(ww$prey_family, ww_mol$prey_family)]
+
+# The code below ensures that the mean is assigned correctly
+ww$meanww_group <- ifelse(
+    is.na(ww$meanww_ind) & is.na(ww$meanww_day) & is.na(ww$meanww_month) & is.na(ww$meanww_year) & is.na(ww$meanww_site) & is.na(ww$meanww_region),
+                          ww$meanww_group, NA) 
+# Calculating sum
+ww$extrap_sumww <- ifelse(!is.na(ww$meanww_group), ww$ind_notmeasured*ww$meanww_group, ww$extrap_sumww)
+
+# Total wet weight
+ww$sumww[is.na(ww$sumww)] <- 0
+ww$totalww <- ww$sumww+ww$extrap_sumww
+
+# # # No extrapolations could be made for Hemithipterus americanus (Sea raven). This species occured in only one digestive tract, it hence does not contribute much to the diet. As this species belongs with the cottidae, we will assign it mean cottidae weight - https://ogsl.ca/app-guidespeces/species.jsp?id=104&lg=en
+
+cottidae_mean <- ww_mol$meanww_group[ww_mol$prey_family == "Cottidae"]
+ww$totalww <- ifelse(
+  ww$prey_specie =="Hemithipterus americanus (Sea raven)", ww$ind_notmeasured*cottidae_mean,
+  ww$totalww)
+
+# Presenting the mean mass to cross-check extrapolation
+meanpreymass <- ww  %>% select(prey_specie, meanww_ind, meanww_day, meanww_month, meanww_year, meanww_site, meanww_region, meanww_group)
+meanpreymass <- transform(meanpreymass, acrosscolumnmean = rowMeans(meanpreymass[,-1], na.rm = TRUE)) # puts all in one columns as currently they are seperated under mean_day, month...
+
+meanpreymass <- meanpreymass  %>% group_by(prey_specie)  %>% summarise(Avg.WetWeight_grams = mean(acrosscolumnmean))
+
+meanpreymass$Avg.WetWeight_grams <- ifelse(
+  meanpreymass$prey_specie == "Hemithipterus americanus (Sea raven)", cottidae_mean,
+  meanpreymass$Avg.WetWeight_grams)
+
+rm(cottidae_mean)# removes cottidae_mean
+
+meanpreymass$Avg.WetWeight_grams <- round(meanpreymass$Avg.WetWeight_grams,2)
+meanpreymass  %>% kable(caption = "Mean prey mass in grams")
+
+# Preserving useful columns 
+ww <- ww %>% dplyr::select(uniqueID, prey_specie, region, date, count, totalww)
+
+# Adding metadata - age, sex, season, region
+ww$sex <- info$sex[match(ww$uniqueID, info$uniqueID)]
+ww$age <- info$age[match(ww$uniqueID, info$uniqueID)]
+ww$season <- info$season[match(ww$uniqueID, info$uniqueID)]
+ww$region_season <- paste(ww$region, ww$season, sep = "_")
+
+# Calculating total wet weight percentage
+ww <- ww %>% 
+    group_by(uniqueID) %>%
+    mutate(totalind = sum(totalww)) %>%
+    mutate(perc_ww = 100*(totalww/totalind)) %>% ungroup()
+
+# Rearranging columns 
+ww <- ww %>%
+ select(uniqueID, sex, age, region_season, date, prey_specie, count, totalww, totalind, perc_ww)
+
+rm(ww_mol, meanpreymass)
+```
+
+## Generating uncertainty around $\%WW_{p,pooled}$ and $H_{pooled}$
+
+To characterize uncertainty for $\%WW_{p,pooled}$ and $H_{pooled}$, we used a bootstrapping technique, with 1000 simulations. Each simulation randomly sampled the seals, with replacement, for a given region and season, and calculated $\%WW_{p,pooled}$ and $H_{pooled}$ using Equation 3 and Equation 4 from the article. The 2.5 and 97.5 percentiles of the resulting distribution were used as the 95% confidence intervals for our sample.
+
+```{r}
+#'
+#' Preparing input data
+## -----------------------------------------
+
+bootprep <- function(unprepared_dataset) {
+  # Select relevant columns and remove duplicates
+  bootpreped <- unprepared_dataset %>%
+    select(uniqueID, prey_specie, totalww) %>% 
+    distinct(
+      uniqueID, 
+      prey_specie, 
+      .keep_all = TRUE
+    ) %>% 
+    spread(prey_specie, totalww) # Convert to wide format
+  
+  # Remove uniqueID column (assumes each row corresponds to a unique individual)
+  bootpreped$uniqueID <- NULL 
+  
+  # Replace NA values with 0
+  bootpreped[is.na(bootpreped)] <- 0 
+  
+  return(bootpreped) # Return prepared data
+}
+
+
+#'
+#' Resampling the population
+## -----------------------------------------
+
+resamplediet <- function(
+    prepared_dataset,
+    replace, 
+    pool,
+    proportion,
+    Nresample, 
+    details
+) {
+  
+  # prepared_dataset <- bootprep(ww)
+  # replace <- T
+  # pool <- T
+  # proportion <- 0.6
+  # Nresample <- 10
+  # details <- T
+
+  
+  # Calculate the effective sample size based on the proportion
+  sampleffect_size <- round(nrow(prepared_dataset) * proportion)
+  
+  # Remove rows where the entire row is NA
+  prepared_dataset <- prepared_dataset[!apply(
+    prepared_dataset, 
+    1, 
+    function(x) all(is.na(x))
+  ),] 
+  
+  # Create an empty matrix to store results
+  out <- matrix(
+    ncol = ncol(prepared_dataset), 
+    nrow = Nresample
+  )
+  
+  # Name the columns of the matrix
+  colnames(out) <- paste("prop_", colnames(prepared_dataset), sep = "")
+  
+  # Loop through the number of resamples
+  for (i in 1:Nresample) {
+    
+    # Set a seed for reproducibility
+    set.seed(i^3 + 9 * i + 2) 
+    
+    # Sample rows with or without replacement
+    sel <- sample(
+      1:nrow(prepared_dataset), 
+      sampleffect_size, 
+      replace = replace
+    )
+    
+    # Subset the data based on the sampled rows
+    boot <- prepared_dataset[sel, ] 
+    
+    # Calculate proportions based on the pooling method
+    if (pool == TRUE) {
+      # Summation method: total prey_i / all prey total
+      out[i, ] <- apply(boot, 2, sum) / sum(apply(boot, 2, sum))
+      
+      
+    } else {
+      # Individual mean method
+      out[i, ] <- apply(
+        boot %>% 
+          mutate(total = rowSums(boot)) %>%
+          mutate(across(everything(), ~ . / total)) %>%
+          select(-total), 
+        2, 
+        mean
+      )}
+  }
+  
+  # Confidence intervals
+  out2 <- rbind(
+    apply(out, 2, quantile, probs = 0.025), # Lower 2.5% quantile
+    apply(out, 2, quantile, probs = 0.975) # Upper 97.5% quantile
+  )
+  
+  # Name the rows for clarity
+  rownames(out2) <- c("lowerCI", "upperCI")
+  
+  
+  # Mean values 
+  if (pool == TRUE) {
+  mean <- prepared_dataset %>%
+    apply(2, sum) %>%
+    `/`(sum(.)) %>%
+    tibble(prey_specie = names(.), mean = .) |>
+    select(prey_specie, mean) 
+  } else {
+    mean <- prepared_dataset %>%
+      mutate(total = rowSums(.)) %>%
+      mutate(across(everything(), ~ . / total)) %>%
+      select(-total) |> 
+      summarise(across(everything(), mean))  |> 
+      pivot_longer(cols = everything(), 
+                   names_to = "prey_specie", 
+                   values_to = "mean") |> 
+      select(prey_specie, mean)}
+  
+  # Convert matrix to data frame and transpose it to long format
+  bootpresent <- out2 %>% 
+    t() %>% 
+    as.data.frame()
+  
+  # Add prey species column and clean up names
+  bootpresent <- tibble::rownames_to_column(bootpresent, "prey_specie")
+  
+  bootpresent$prey_specie <- paste(
+    substr(bootpresent$prey_specie, 6, nchar(bootpresent$prey_specie))
+  )
+  
+  # Adding mean values from the dataset itself
+  bootpresent$mean <- mean$mean[match(bootpresent$prey_specie, mean$prey_specie)]
+  
+  # Return detailed results or summary statistics based on 'details'
+  if (details) {
+    return(list(Resampling = out, Stats = bootpresent))
+  } else {
+    return(out2)
+  }
+}
+
+#'
+#' Preparing output format
+## -----------------------------------------
+
+touchupboot <- function(bootpresent) {
+  
+  # Convert proportions to percentages and round to 2 decimal places
+  bootpresent <- bootpresent %>% 
+    mutate_if(is.numeric, ~ . * 100) %>% 
+    mutate_if(is.numeric, ~ round(., 2))
+  
+  # Create a formatted estimate column
+  bootpresent <- bootpresent |> 
+    mutate(estimate = paste0(mean, "\n[", lowerCI, ",", upperCI, "]")) |> 
+    select(prey_specie, estimate)
+  
+  return(bootpresent) # Return formatted output
+}
+
+## Merging the three functions above
+resample_to_generate_uncertainty <- function(
+    unprepared_dataset, 
+    grouping_column_as_string, 
+    replace = TRUE, 
+    pool = TRUE,
+    proportion = 1,
+    Nresample = 1000, 
+    details = TRUE
+) {
+  
+  # Initialize an empty data frame for storing results
+  overalloutputboot <- as.data.frame(unique(unprepared_dataset$prey_specie))
+  colnames(overalloutputboot) <- c("prey_specie")
+  
+  # Loop through each unique group in the unprepared_dataset
+  unit <- as.vector(unique(unprepared_dataset[[grouping_column_as_string]])) 
+  for (u in 1:length(unit)) {
+    
+    # Subset unprepared_dataset for the current group
+    datasetmod <- unprepared_dataset[
+      unprepared_dataset[[grouping_column_as_string]] == unit[u], 
+    ]
+    
+    # Perform bootstrap re-sampling and calculate statistics
+    result <- resamplediet(
+      bootprep(datasetmod),
+      replace, 
+      pool,
+      proportion,
+      Nresample, 
+      details
+    )
+    
+    # Prepare the resampling results for the current group
+    unitoutput <- touchupboot(result[[2]]) 
+    colnames(unitoutput) <- c(
+      "prey_specie", 
+      paste("estimate", unit[u], proportion, sep = "_"))
+    
+    # Merge results into the overall output
+    overalloutputboot <- merge(
+      overalloutputboot, 
+      unitoutput, 
+      all = TRUE
+    )
+  }
+  
+  return(overalloutputboot) # Return combined results for all groups
+}
+```
+
+### $\%WW_{p,pooled}$
+
+```{r}
+boot <- resample_to_generate_uncertainty(ww, "region_season")
+
+boot %>% datatable()
+```
+
+#### Four metrics to characterise the diet
+
+To reconstruct the populational diet composition of grey seals harvested in the waters surrounding Magdalen Islands during summer and fall sampling of 2015-2023, we used four commonly used dietary metrics derived from hard-part analysis: frequency of occurrence, numerical abundance, percent wet weight/biomass, and Shannon’s diversity index. Refer to the article for additional details on the calculation and usage of each metric.
+
+```{r}
+# Dietary behaviour: how often (FO), how much (NUM), how important (%WW)
+behaviour <- dat %>%
+  mutate(
+    region_season = ww$region_season[match(uniqueID, ww$uniqueID)]
+  )
+
+# Extract unique sampling groups
+samplinggroup <- sort(unique(behaviour$region_season))
+
+# Initialize lists to save results and plots
+plotlist <- list()
+vplist <- list()
+numbers_xy <- list()
+numbers_pie <- list()
+
+# Some species have long names that impede readability in the figures, we hence split their names across two lines
+add_new_line_species_name <- function(species_name) {
+  # Split the species name into words using a space as the delimiter
+  words <- strsplit(species_name, " ")[[1]]
+  
+  if (length(words) > 1) {
+    # If the species name has more than one word:
+    # Combine the first and second words with a newline separator
+    modified_name <- paste(words[1], words[2], sep = "\n")
+  } else {
+    # If the species name has only one word, keep it unchanged
+    modified_name <- species_name
+  }
+  
+  # Return the modified species name
+  return(modified_name)
+}
+
+for (s in 1:length(samplinggroup)) {
+  
+  # Frequency of Occurrence (FO)
+  group <- behaviour %>%
+    filter(region_season == paste0(samplinggroup[s]))
+  
+  FO <- group %>%
+    group_by(prey_specie) %>%
+    summarise(
+      n.dt = n(),
+      FO = 100 * (n.dt / length(unique(group$uniqueID))),
+      N.Abundance = sum(count)  # Used later for numerical abundance
+    ) %>%
+    ungroup()
+  
+  # Numerical abundance
+  prey <- unique(group$prey_specie)
+  
+  # Empty dataframe for numerical abundance calculation
+  count_for_abundance <- NULL
+  for (p in 1:length(prey)) {
+    unique_extract <- subset(group, prey_specie == prey[p])
+    unique_extract <- unique(unique_extract$uniqueID)
+    sub <- group %>%
+      filter(uniqueID %in% unique_extract)
+    total.count <- sum(sub$count)
+    
+    out <- data.frame(
+      prey_specie = prey[p],
+      total.count
+    )
+    
+    count_for_abundance <- rbind(count_for_abundance, out)
+  }
+  
+  # Add total count and calculate percent abundance
+  FO$total.count <- count_for_abundance$total.count[
+    match(FO$prey_specie, count_for_abundance$prey_specie)
+  ]
+  FO$percentabundance <- (FO$N.Abundance / FO$total.count) * 100
+  
+  # Percent wet weight
+  percwwpergroup <- boot %>%
+    select(matches(paste0('prey_specie|', samplinggroup[s]))) %>%
+    # Extract mean, lower CI, and upper CI
+    mutate(
+      mean = str_extract(
+        !!sym(paste0("estimate_", samplinggroup[s], "_1")),
+        "^[^\\n]+"
+      ),
+      CI = str_extract(
+        !!sym(paste0("estimate_", samplinggroup[s], "_1")),
+        "\\[.*\\]"
+      ),
+      lCI = str_extract(CI, "(?<=\\[)[^,]+"),
+      uCI = str_extract(CI, "(?<=,)[^\\]]+")
+    ) %>%
+    mutate(
+      mean = as.numeric(mean),
+      lCI = as.numeric(lCI),
+      uCI = as.numeric(uCI)
+    ) %>%
+    select(-CI)
+  
+  # Merge FO and numerical abundance
+  percwwpergroup$FO <- FO$FO[
+    match(percwwpergroup$prey_specie, FO$prey_specie)
+  ]
+  percwwpergroup$NUM <- FO$percentabundance[
+    match(percwwpergroup$prey_specie, FO$prey_specie)
+  ]
+  
+  # Remove rows with NA means
+  percwwpergroup <- percwwpergroup %>%
+    filter(!is.na(mean))
+  
+  # Add lower and upper limits
+  percwwpergroup$lower <- percwwpergroup$lCI
+  percwwpergroup$upper <- percwwpergroup$uCI
+  
+  # Identify top three contributors
+  first_three_contributors <- percwwpergroup %>%
+    arrange(desc(mean)) %>%
+    head(3) %>%
+    select(prey_specie)
+  
+  # Highlight top three contributors
+  percwwpergroup$highlight <- ifelse(
+    percwwpergroup$prey_specie %in% first_three_contributors$prey_specie,
+    "yes",
+    "no"
+  )
+  
+  # Simplify species names for plotting
+  percwwpergroup$prey_specie <- str_extract_all(
+    percwwpergroup$prey_specie, "\\([^()]+\\)"
+  )
+  percwwpergroup$prey_specie <- substring(
+    percwwpergroup$prey_specie, 2, nchar(percwwpergroup$prey_specie) - 1
+  )
+  
+  # Add prey type
+  percwwpergroup$type <- NCF$type[
+    match(percwwpergroup$prey_specie, NCF$common_name)
+  ]
+  
+  # Apply line-breaking function to species names
+  percwwpergroup$prey_specie <- sapply(
+    percwwpergroup$prey_specie,
+    add_new_line_species_name
+  )
+  
+  # Save processed data
+  numbers_xy[[s]] <- percwwpergroup
+  
+  # Remove zero means
+  percwwpergroup <- percwwpergroup %>%
+    filter(mean != 0)
+  
+  # Plot bubble plot
+  plotlist[[s]] <- ggplot() +
+    geom_point(
+      data = percwwpergroup[percwwpergroup$highlight == "no", ],
+      aes(x = FO, y = mean, col = type, size = NUM),
+      pch = 19, alpha = 0.3
+    ) +
+    geom_errorbar(
+      data = percwwpergroup[percwwpergroup$highlight == "yes", ],
+      aes(x = FO, y = mean, ymin = lower, ymax = upper),
+      width = 1, col = "black"
+    ) +
+    geom_point(
+      data = percwwpergroup[percwwpergroup$highlight == "yes", ],
+      aes(x = FO, y = mean, col = type, size = NUM),
+      pch = 19, alpha = 0.9
+    ) +
+    scale_size(
+      breaks = c(1, 10, 20, 40, 60, 80),
+      limits = c(0, 100),
+      range = c(0.5, 10)
+    ) +
+    # ggrepel::geom_text_repel(
+    #   data = percwwpergroup[percwwpergroup$highlight == "yes", ],
+    #   aes(FO, upper + 0.08, label = prey_specie),
+    #   direction = "x",
+    #   box.padding = 0.1,
+    #   point.padding = 0.1,
+    #   segment.color = NA,
+    #   size = 5,
+    #   force = 0.5,
+    #   force_pull = 0.1,
+    #   max.time = 2,
+    #   seed = 1234
+    # ) +
+    geom_text(
+      data = subset(percwwpergroup, highlight == "yes"),
+      aes(
+        x = FO, 
+        y = ifelse(prey_specie == "Atlantic\nherring", 
+                   upper + 2, upper + 1), 
+        label = prey_specie),
+      vjust = 0,
+      size = 5) +
+    xlim(0, 100) +
+    ylim(0, 100) +
+    labs(
+      x = NULL,
+      y = NULL,
+      title = ifelse(
+        samplinggroup[s] == "M.Islands_Fall", "Magdalen Islands (Fall)",
+        ifelse(
+          samplinggroup[s] == "M.Islands_Summer", "Magdalen Islands (Summer)",
+          ifelse(
+            samplinggroup[s] == "M.Bay_Fall", "Miramichi Bay (Fall)",
+            "Northumberland Strait (Fall)"
+          )
+        )
+      ),
+      size = "Prey-specific \nNumerical Abundance (%)",
+      col = "Functional Group"
+    ) +
+    scale_colour_manual(values = cbbPalette) +
+    theme_bw() +
+    theme(
+      plot.title = element_text(
+        hjust = 0.6, size = 16), 
+      axis.text = element_text(size = 14), 
+      legend.text = element_text(size = 14), 
+      legend.title = element_text(size = 14))
+  
+  # Pie chart for functional group contribution
+  funcgroup <- percwwpergroup %>%
+    group_by(type) %>%
+    summarise(contribution = sum(mean)) %>%
+    ungroup()
+  
+  numbers_pie[[s]] <- funcgroup
+  
+  vplist[[s]] <- ggplot(data = funcgroup, aes(x = "", y = contribution, fill = type)) +
+    geom_col(position = "fill") +
+    coord_polar(theta = "y", start = 0) +
+    scale_fill_manual(values = cbbPalette) +
+    guides(fill = "none") +
+    theme_void()
+}
+
+# Figures for manuscript
+
+# Magdalen Islands
+figMaggies <- ggarrange(
+  plotlist[[3]], plotlist[[2]],
+  align = 'h', common.legend = TRUE, legend = "top",
+  labels = c("A", "B")
+)
+
+figMaggiesAxes <- annotate_figure(
+  figMaggies,
+  left = textGrob("Percent Wet-Weight (%)", rot = 90, hjust = 0.65, gp = gpar(cex = 1.3)),
+  bottom = textGrob("Frequency of Occurrence (%)", hjust = 0.38, gp = gpar(cex = 1.3))
+)
+
+figMaggiesAxesPies <- ggdraw() +
+  draw_plot(figMaggiesAxes, x = 0, y = 0, width = 1, height = 1) +
+  draw_plot(vplist[[3]], x = 0.05, y = 0.55, width = 0.20, height = 0.20) +
+  draw_plot(vplist[[2]], x = 0.537, y = 0.55, width = 0.20, height = 0.20)
+
+ggsave(
+  "../4_MANUSCRIPT/output/figures/diet_maggies.png",
+  figMaggiesAxesPies,
+  bg = "white",
+  width = 10, height = 8, dpi = 600
+)
+
+ggsave(
+  "../4_MANUSCRIPT/output/figures/Figure2.tif",
+  figMaggiesAxesPies,
+  bg = "white",
+  width = 10, height = 8, dpi = 600
+)
+
+# Fall plots
+figFall <- ggarrange(
+  plotlist[[2]], plotlist[[1]], plotlist[[4]],
+  ncol = 3, align = 'h', common.legend = TRUE, legend = "top",
+  labels = c("A", "B", "C")
+)
+
+figFallAxes <- annotate_figure(
+  figFall,
+  left = textGrob("Percent Wet-Weight (%)", rot = 90, hjust = 0.65, gp = gpar(cex = 1.3)),
+  bottom = textGrob("Frequency of Occurrence (%)", hjust = 0.38, gp = gpar(cex = 1.3))
+)
+
+figFallAxesPies <- ggdraw() +
+  draw_plot(figFallAxes, x = 0, y = 0, width = 1, height = 1) +
+  draw_plot(vplist[[2]], x = 0.05, y = 0.62, width = 0.18, height = 0.18) +
+  draw_plot(vplist[[1]], x = 0.37, y = 0.62, width = 0.18, height = 0.18) +
+  draw_plot(vplist[[4]], x = 0.70, y = 0.62, width = 0.18, height = 0.18)
+
+ggsave(
+  "../4_MANUSCRIPT/output/figures/diet_fall.png",
+  figFallAxesPies,
+  bg = "white",
+  width = 10, height = 8, dpi = 600
+)
+
+ggsave(
+  "../4_MANUSCRIPT/output/figures/Figure3.tif",
+  figFallAxesPies,
+  bg = "white",
+  width = 10, height = 8, dpi = 600
+)
+```
+
+### $H_{pooled}$
+
+```{r}
+PopShannonEstimate <- function(data) {
+  # Calculate Shannon index and 95% CI for diet proportions
+  
+  # Calculate mean Shannon index
+  mean <- bootprep(data) %>%
+    apply(2, sum) %>%
+    `/`(sum(.)) %>%
+    tibble(prey_specie = names(.), mean = .) %>%
+    summarise(
+      H = -sum(mean * log(mean)) %>%
+        round(2)
+    )
+  
+  # Bootstrap to estimate confidence intervals
+  CI <- resamplediet(
+    bootprep(data),
+    replace = TRUE,
+    pool = TRUE,
+    proportion = 1,
+    Nresample = 1000,
+    details = TRUE
+  )[[1]] %>%
+    data.frame() %>%
+    mutate_if(is.numeric, ~ . * log(.)) %>%
+    rowwise() %>%
+    mutate(
+      Shannon = -sum(c_across(everything()), na.rm = TRUE)
+    ) %>%
+    select(Shannon) %>%
+    ungroup() %>%
+    summarise(
+      lCI = quantile(Shannon, probs = c(0.025)) %>%
+        round(2),
+      uCI = quantile(Shannon, probs = c(0.975)) %>%
+        round(2)
+    ) %>%
+    transmute(
+      Prey = "Shannon Index",
+      WW = paste0(mean, " [", lCI, ",", uCI, "]")
+    ) %>%
+    data.frame()
+  
+  return(CI)
+}
+
+# Initialize list for summary tables
+summaries <- list()
+
+for (s in 1:length(samplinggroup)) {
+  
+  group_contribution <- numbers_pie[[s]] %>%
+    data.frame()
+  
+  # Create summary table for each sampling group
+  table <- bind_rows(
+    numbers_xy[[s]] %>%
+      select(
+        Prey = prey_specie,
+        WW = mean, lCI, uCI,
+        FO, NUM, Group = type
+      ) %>%
+      mutate(
+        FO = round(FO, 1),
+        NUM = round(NUM, 1),
+        WW = paste0(WW, " [", lCI, ",", uCI, "]"),
+        lCI = NULL,
+        uCI = NULL
+      ) %>%
+      arrange(Prey),
+    
+    PopShannonEstimate(
+      ww %>%
+        filter(region_season == samplinggroup[s])
+    )
+  ) %>%
+    mutate(
+      contribution = group_contribution$contribution[
+        match(Group, group_contribution$type)
+      ]
+    )
+  
+  summaries[[as.character(samplinggroup[s])]] <- table
+}
+
+# Save summary results
+save(
+  summaries,
+  file = "../4_MANUSCRIPT/output/tables/bootstrapping_summaries.Rda"
+)
+```
+
+```{r}
+# Saving files for manuscript
+save(mol, file = "../4_MANUSCRIPT/output/tables/mol.Rda")
+
+save(info, file = "../4_MANUSCRIPT/output/tables/info.Rda")
+
+save(NCF, file = "../4_MANUSCRIPT/output/tables/NCF.Rda")
+
+save(ww, file = "output/Dataframes/ww.Rda")
+```
+
+### $\%WW_{p,individual}$
+
+An alternative method to calculate the relative importance of prey taxa in digestive tracts, in place of using pooled diet estimates, is to use individual mean diet estimates (see supplementary materials). This approach calculates the percent contribution of each prey taxon for each individual seal, then averages these values across all sampled individuals to provide the relative importance of prey in an average digestive track.
+
+```{r}
+individual_diet_reconstruction <- resample_to_generate_uncertainty(
+  ww, 
+  "region_season",
+  pool = F
+  )
+
+save(individual_diet_reconstruction, file = "../4_MANUSCRIPT/output/tables/individual_diet_reconstruction.Rda")
+
+rm(list = ls())
+```
