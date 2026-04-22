@@ -3,16 +3,10 @@ cff-version: 1.2.0
 title: >-
   Dietary-composition-and-sources-of-variability-in-emerging-offshore-grey-seal-colonies
 message: >-
-  Analyses performed in the article Alymuhammad I. Irani,
-  Xavier Bordeleau, Hugues P. Benoît, Théo Garnier,
-  Pier-Olivier Cusson, Pierre Rivard, Mike O. Hammill, and
-  Fanie Pelletier. 2026. Dietary composition and sources of
-  variability in emerging offshore grey seal colonies in the
-  Northwest Atlantic. Canadian Journal of Zoology. 104:
-  1-17. https://doi.org/10.1139/cjz-2025-0089
+  The analyses in this repository were conducted as part of Irani et al. 2026 (https://doi.org/10.1139/cjz-2025-0089). Corresponding data are publicly available on the Department of Fisheries and Oceans Canada's Open Government Portal (https://open.canada.ca/data/en/dataset/c30dc299-9026-4c44-b631-9fd6357aeef4).
 type: software
 authors:
-  - given-names: Alymuhammad
+  - given-names: Alymuhammad I.
     family-names: Irani
     email: iranialymuhammad@outlook.com
     orcid: 'https://orcid.org/0009-0009-6735-3744'
@@ -24,7 +18,7 @@ identifiers:
     value: 10.1139/cjz-2025-0089
     description: Research Article
 repository-code: >-
-  https://github.com/Alynvince/Dietary-composition-and-sources-of-variability-in-emerging-offshore-grey-seal-colonies.git
+  https://github.com/imlxbordeleau/Dietary-composition-and-variability-in-emerging-grey-seal-colonies.git
 abstract: >-
   Apex predators are at the centre of human–wildlife
   conflict, particularly when their prey include
@@ -60,4 +54,4 @@ keywords:
   - Diet
   - Emerging offshore colonies
 license: CC0-1.0
-date-released: '2025-08-30'
+date-released: '2026-04-22'
